@@ -1,0 +1,21 @@
+
+Name: agdapaste
+Version: 0.0.0.0
+Build-Type: Simple
+Cabal-Version: >= 1.2
+
+Executable agdapaste
+  Build-depends:  base 
+                , safecopy
+                , acid-state == 0.6.3
+                , yesod == 0.10.1
+                , process
+                , skein == 0.1.0.5
+                , containers
+                , mtl
+                , yesod-static == 0.10.1
+                , text
+                , yesod-form == 0.4.1
+  Main-is: Main.hs
+  Ghc-options: -threaded
+
