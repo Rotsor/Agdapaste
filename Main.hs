@@ -4,6 +4,7 @@
 
 module Main where
 
+import Data.Time.Clock
 import Control.Applicative
 import State_v2
 import qualified State as State_V1
@@ -28,7 +29,8 @@ checkSubmission acid id submission = do
   let isSuccess = case result of
         ExitSuccess -> TypeCheckSuccess
         ExitFailure _ -> TypeCheckFailure agdaOutput
-  update acid (ReportPendingResult id isSuccess)
+  time <- getCurrentTime
+  update acid (ReportPendingResult id (time, isSuccess))
   
 
 checkerOnce :: AcidState Database -> IO ()
@@ -36,7 +38,7 @@ checkerOnce acid = do
   Database { pending, submissions } <- query acid ReadDb
   case Seq.viewl pending of
     EmptyL -> return ()
-    a :< _ -> checkSubmission acid a (index submissions a)
+    a :< _ -> checkSubmission acid a (submissionBody $ index submissions a)
 
 -- | A process running forever, typechecking Agda programs and collecting results
 checker :: AcidState Database -> IO a
@@ -53,7 +55,6 @@ getLineUntilZOGO = do
 main = do
   acid <- openLocalState (Database { submissions = Seq.empty
                                   , pending = Seq.empty
-                                  , checked = Map.empty
                                   })
   forkIO (checker acid)
   runWeb acid

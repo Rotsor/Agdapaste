@@ -10,14 +10,17 @@ module Web where
 import Yesod
 import Control.Applicative
 import Yesod.Form
-import Data.Text hiding (length)
+import Data.Text hiding (length, mapAccumL)
 import Control.Monad.Reader
 import Data.Acid
+import Data.Time.Clock
 import State_v2
 import qualified Data.Sequence as Seq
 import qualified Data.Map as Map
 import Yesod.Static
 import Paths
+import Data.Time.Calendar
+import Data.Traversable
 
 
 data AgdaPaste = AgdaPaste {
@@ -42,62 +45,69 @@ instance RenderMessage AgdaPaste FormMessage where
   renderMessage _ _ = defaultFormMessage
 
 agdaForm :: Html -> MForm AgdaPaste AgdaPaste (FormResult Text, Widget)
-agdaForm = renderDivs $ unTextarea <$> areq textareaField "Source" {fsId=Just "Source"} (Just (Textarea "module SUBMISSION where\n\n"))
+agdaForm = renderDivs $ 
+  ((unTextarea <$> areq textareaField "Source" {fsId=Just "Source"} (Just (Textarea "module SUBMISSION where\n\n"))))
 
 postSubmitR :: Handler RepHtml
 postSubmitR = do
-  ((result, _), _) <- runFormPost agdaForm
+  ((result, xml), enctype) <- runFormPost agdaForm
   case result of
     FormSuccess contents -> do
       acid <- getAcid
-      id <- liftIO $ Data.Acid.update acid (AddSubmission $ unpack $ contents)
+      id <- liftIO $ join $ Data.Acid.update acid <$> (AddSubmission <$> ((,) <$> getCurrentTime <*> pure (unpack contents)))
       liftIO $ putStrLn $ unpack $ contents
       redirect (StatusR id)
-    _ -> return ()
-  defaultLayout [whamlet|
+      defaultLayout $ [whamlet|
                  <p>Thank you for your submission!|]
+    _ -> showForm enctype xml
+
 
 seqLookup i seq | i < 0 || i >= Seq.length seq = Nothing
  | otherwise = Just $ Seq.index seq i
 
+noSubmission i = defaultLayout $ [whamlet|<p>No such problem: #{show i}!|]
+
 getSourceR :: Int -> Handler RepHtml
-getSourceR i = do
-  Database { submissions } <- getDB
-  defaultLayout $ case seqLookup i submissions of
-    Nothing -> [whamlet|<p>No such problem!|]
-    Just source -> [whamlet|<pre>#{source}|]
+getSourceR i = withSubmission i $ \Submission {submissionBody} -> defaultLayout [whamlet|<pre>#{submissionBody}|]
 
 htmlRFromId id = HtmlR $ StaticRoute [pack $ "S" ++ show id ++ ".html"] []
 
+traverseWithIndex :: (Traversable t, Applicative f) => (Int -> a -> f b) -> t a -> f (t b)
+traverseWithIndex f x = traverse (uncurry f) $ snd $ mapAccumL (\i x -> (i+1, (i, x))) 0 x
+
 getGlobalStatusR :: Handler RepHtml
 getGlobalStatusR = do
-  Database { submissions, checked } <- getDB
+  Database { submissions } <- getDB
   defaultLayout $ do
-    let tBody = forM_ [0 .. Seq.length submissions - 1]
-           (\i -> 
-            let size = length $ Seq.index submissions i
-                status = case Map.lookup i checked of
+    let 
+      tBody = (const () <$>) $ flip traverseWithIndex submissions $
+        (\i Submission { submissionBody, submissionDate, submissionChecked } -> 
+            let size = length submissionBody
+                status = case submissionChecked of
                   Nothing -> [whamlet|Unchecked...|]
-                  Just (TypeCheckFailure _) -> [whamlet|<a href=@{CompileErrorR i}
-                                                            Failed|]
-                  Just TypeCheckSuccess -> [whamlet|<a href=@{htmlRFromId i}>Succeeded|]
+                  Just (date, result) -> [whamlet|<a href=@{link}>#{text} on #{show date}|] where
+                     (link, text) = case result of
+                       TypeCheckFailure _ -> (CompileErrorR i, "Failed" :: Text)
+                       TypeCheckSuccess -> (htmlRFromId i, "Succeeded")
                 in
             [whamlet|
-            <tr> 
+            <tr>
              <td>
                <a href=@{SourceR i}>##{show i}
              <td>
                #{show size}
              <td>
+               #{show submissionDate}
+             <td>
                ^{status}
             |]
             )
-    return ()
     [whamlet|
      <table>
        <tr>
          <th>id
          <th>size
+         <th>date
          <th>status
        ^{tBody}|]
 
@@ -107,30 +117,34 @@ getDB = do
   liftIO $ Data.Acid.query acid ReadDb
 
 getStatusR :: Int -> Handler RepHtml
-getStatusR x = do
-  Database { checked } <- getDB
-  case Map.lookup x checked of
+getStatusR i = withSubmission i $ \s -> do
+  setHeader "refresh" "2"
+  case snd <$> submissionChecked s of
     Nothing -> defaultLayout $
-      [whamlet|<p>The submission #{show x} is still being typechecked.|]
-    Just TypeCheckSuccess -> redirect (htmlRFromId x)
-    Just (TypeCheckFailure message) -> redirect (CompileErrorR x)
+      [whamlet|<p>The submission #{show i} is still being typechecked.|]
+    Just TypeCheckSuccess -> redirect (htmlRFromId i)
+    Just (TypeCheckFailure message) -> redirect (CompileErrorR i)
+
+getSubmission :: Int -> Handler (Maybe Submission)
+getSubmission i = seqLookup i . submissions <$> getDB
+
+withSubmission :: Int -> (Submission -> Handler RepHtml) -> Handler RepHtml
+withSubmission i h =
+  maybe (noSubmission i) h =<< getSubmission i
 
 getCompileErrorR :: Int -> Handler RepHtml
-getCompileErrorR id = do
-  Database { checked } <- getDB
-  case Map.lookup id checked of
-    Just (TypeCheckFailure message) ->  defaultLayout [whamlet|
+getCompileErrorR id = withSubmission id $ \s -> do
+  case submissionChecked s of
+    Just (_, TypeCheckFailure message) ->  defaultLayout [whamlet|
                                                       <p>Type check failure for submission #{show id}:
                                                       <pre>#{message}|]
     _ -> defaultLayout [whamlet|There is no type check failure for submission #{show id}|]
 
    
 
-getRootR :: Handler RepHtml
-getRootR = do
-    ((_, wform), enctype) <- generateFormPost $ agdaForm
+showForm enctype xml = do
     defaultLayout $ do
-      addLucius [lucius|
+      toWidget [lucius|
         #Source {
             min-width:500px;
             min-height:500px;
@@ -141,9 +155,15 @@ getRootR = do
                    <a href=@{GlobalStatusR}>
                      Status
                  <form method=post action=@{SubmitR} enctype="#{enctype}">
-                       \^{wform}
+                       \^{xml}
                        <input type="submit">
-|]
+  |]
+
+
+getRootR :: Handler RepHtml
+getRootR = do
+    (wform, enctype) <- generateFormPost $ agdaForm
+    showForm enctype wform
 
 runWeb acid = do
   stat <- static htmlPath

@@ -7,15 +7,17 @@ Cabal-Version: >= 1.2
 Executable agdapaste
   Build-depends:  base 
                 , safecopy
-                , acid-state == 0.6.3
-                , yesod == 0.10.1
+                , acid-state
+                , yesod
                 , process
-                , skein == 0.1.0.5
+                , skein
                 , containers
                 , mtl
-                , yesod-static == 0.10.1
+                , yesod-static
                 , text
-                , yesod-form == 0.4.1
+                , yesod-form
+                , time
+                , polyparse
   Main-is: Main.hs
   Ghc-options: -threaded
 

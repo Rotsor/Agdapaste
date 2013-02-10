@@ -11,6 +11,7 @@ import qualified Data.Map as Map
 import Control.Monad.State                   ( get, put )
 import Control.Monad.Reader                   ( ask )
 import Data.List
+import Data.Char
 import Data.Typeable
 
 import Data.Acid
@@ -28,7 +29,8 @@ replace :: String -> String -> String -> String
 replace a b s | a `isPrefixOf` s = b ++ replace a b (drop (length a) s)
 replace a b (h:s) = h : replace a b s
 replace a b [] = []
-  
+
+
 addSubmission :: String -> Update Database Int
 addSubmission text = do
   Database { submissions, pending, checked } <- get
